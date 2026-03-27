@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react'
 import HeatmapGrid from '../components/HeatmapGrid'
+import MapboxHeatmap from '../components/MapboxHeatmap/MapboxHeatmap'
 import type { Dispatch, SetStateAction } from 'react'
 import type { HeatmapDataset, RouteStatus, Schedule } from '../types/dashboard'
-
-const STM_ROUTES = ['24 Sherbrooke', '80 Du Parc', '55 Saint-Laurent', '121 Sauve/Cote-Vertu']
+import type { RouteOption, SummaryData } from '../hooks/useStmData'
 
 const TOD_WINDOWS = [
   { id: 'all', label: 'All Day', hours: null },
@@ -57,6 +57,10 @@ type DashboardPageProps = {
   routeStatus: RouteStatus
   totalEvents: number
   peakHour: string
+  routes: RouteOption[]
+  summary: SummaryData | null
+  dataLoading: boolean
+  dataError: string | null
   onStart: () => void
   onEnd: () => void
   onLogout: () => void
@@ -71,13 +75,26 @@ export default function DashboardPage({
   routeStatus,
   totalEvents,
   peakHour,
+  routes,
+  summary,
+  dataLoading,
+  dataError,
   onStart,
   onEnd,
   onLogout,
 }: DashboardPageProps) {
-  const [routeFrom, setRouteFrom] = useState(STM_ROUTES[0])
-  const [routeTo, setRouteTo] = useState(STM_ROUTES[1])
+  const routeLabels = routes.length > 0 ? routes.map((r) => r.label) : ['Loading...']
+  const [routeFrom, setRouteFrom] = useState('')
+  const [routeTo, setRouteTo] = useState('')
   const [todFilter, setTodFilter] = useState('all')
+
+  // Set default route selections when routes load
+  useEffect(() => {
+    if (routes.length > 0 && !routeFrom) {
+      setRouteFrom(routes[0].label)
+      if (routes.length > 1) setRouteTo(routes[1].label)
+    }
+  }, [routes, routeFrom])
 
   const selectedHeatmap =
     heatmapDatasets.find((d) => d.id === selectedHeatmapId) ?? heatmapDatasets[0]
@@ -108,13 +125,19 @@ export default function DashboardPage({
         </div>
       </header>
 
+      {dataError && (
+        <div className="auth-error" style={{ textAlign: 'center' }}>
+          API Error: {dataError}
+        </div>
+      )}
+
       <section className="kpi-grid">
         <article className="kpi-card blue">
-          <p className="kpi-label">Active Heatmap</p>
-          <p className="kpi-value cyan" style={{ fontSize: '1.1rem', lineHeight: 1.3 }}>
-            {selectedHeatmap?.title?.split(' ').slice(0, 3).join(' ') ?? '-'}
+          <p className="kpi-label">Total Stops</p>
+          <p className="kpi-value cyan">
+            {dataLoading ? '...' : (summary?.totalStops?.toLocaleString() ?? '-')}
           </p>
-          <p className="muted">Current dataset in focus</p>
+          <p className="muted">{summary?.totalRoutes ? `Across ${summary.totalRoutes} routes` : 'Loading...'}</p>
         </article>
         <article className="kpi-card green">
           <p className="kpi-label">Route Status</p>
@@ -135,7 +158,9 @@ export default function DashboardPage({
         </article>
         <article className="kpi-card amber">
           <p className="kpi-label">Total Events</p>
-          <p className="kpi-value amber">{totalEvents.toLocaleString()}</p>
+          <p className="kpi-value amber">
+            {dataLoading ? '...' : totalEvents.toLocaleString()}
+          </p>
           <p className="muted">Peak hour: {peakHour}</p>
         </article>
       </section>
@@ -149,7 +174,7 @@ export default function DashboardPage({
           <label>
             From Route
             <select value={routeFrom} onChange={(e) => setRouteFrom(e.target.value)}>
-              {STM_ROUTES.map((r) => (
+              {routeLabels.map((r) => (
                 <option key={r}>{r}</option>
               ))}
             </select>
@@ -158,7 +183,7 @@ export default function DashboardPage({
           <label>
             To Route
             <select value={routeTo} onChange={(e) => setRouteTo(e.target.value)}>
-              {STM_ROUTES.map((r) => (
+              {routeLabels.map((r) => (
                 <option key={r}>{r}</option>
               ))}
             </select>
@@ -205,6 +230,24 @@ export default function DashboardPage({
         </div>
       </section>
 
+      {summary?.busiestStops && summary.busiestStops.length > 0 && (
+        <section className="route-planner-card">
+          <div className="card-title-row">
+            <h2>Busiest Stops</h2>
+            <span className="card-badge">By Trip Count</span>
+          </div>
+          <div className="busiest-stops-list">
+            {summary.busiestStops.map((stop, i) => (
+              <div key={stop.stop_id} className="busiest-stop-row">
+                <span className="busiest-stop-rank">#{i + 1}</span>
+                <span className="busiest-stop-name">{stop.stop_name}</span>
+                <span className="busiest-stop-count">{stop.trip_count.toLocaleString()}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
       <section className="heatmap-card">
         <div className="heatmap-top">
           <div>
@@ -245,6 +288,12 @@ export default function DashboardPage({
           </div>
         </div>
 
+        {dataLoading && !selectedHeatmap && (
+          <p className="muted" style={{ textAlign: 'center', padding: '2rem' }}>
+            Loading heatmap data from Databricks...
+          </p>
+        )}
+
         {selectedHeatmap && <HeatmapGrid dataset={selectedHeatmap} todRange={activeTod.hours} />}
 
         <div className="heatmap-legend">
@@ -260,21 +309,13 @@ export default function DashboardPage({
 
       <section className="map-card">
         <div className="card-title-row">
-          <h2>Montreal Bus Network</h2>
-          <span className="card-badge">Live Context Map</span>
+          <h2>Montreal Transit Heatmap</h2>
+          <span className="card-badge">Frequency Map</span>
         </div>
         <p className="muted">
-          Montreal network context for STM bus operations.
+          Hourly trip density across the STM network. Use the timeline to explore patterns.
         </p>
-        <div className="map-frame-wrap">
-          <iframe
-            title="Montreal map"
-            className="map-frame"
-            loading="lazy"
-            referrerPolicy="no-referrer-when-downgrade"
-            src="https://www.openstreetmap.org/export/embed.html?bbox=-73.91%2C45.42%2C-73.35%2C45.72&layer=mapnik"
-          />
-        </div>
+        <MapboxHeatmap />
       </section>
     </main>
   )
