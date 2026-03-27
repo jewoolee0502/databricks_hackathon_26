@@ -43,6 +43,7 @@ Create a `.env` file in the project root (or copy from `.env.example`) and confi
 
 ```bash
 VITE_AUTH_API_BASE_URL=http://localhost:8000
+VITE_GOOGLE_MAPS_API_KEY=your_google_maps_api_key
 ```
 
 Frontend login calls:
@@ -50,6 +51,12 @@ Frontend login calls:
 - `POST /auth/login`
 - JSON body: `{ "email": "...", "password": "..." }`
 - Expected JSON response: `{ "token": "jwt-or-session-token" }`
+
+Map panel configuration:
+
+- Uses Google Maps embed in the dashboard.
+- Set `VITE_GOOGLE_MAPS_API_KEY` for Google Maps Embed API (`Maps Embed API` must be enabled in your Google Cloud project).
+- If no key is set, app falls back to a no-key Google Maps embed URL.
 
 If the API is unavailable or unreachable, the app automatically falls back to local browser auth:
 

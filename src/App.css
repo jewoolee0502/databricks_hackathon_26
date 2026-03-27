@@ -596,6 +596,17 @@ input[type='datetime-local'] {
   display: block;
 }
 
+.suggestion-card {
+  min-height: 320px;
+  background: var(--surface);
+  border: 1px dashed var(--border2);
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  gap: 0.5rem;
+}
+
 @media (max-width: 900px) {
   .kpi-grid {
     grid-template-columns: 1fr 1fr;

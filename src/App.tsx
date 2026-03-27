@@ -3,6 +3,8 @@ import type { FormEvent } from 'react'
 import './App.css'
 import DashboardPage from './pages/DashboardPage'
 import LoginPage from './pages/LoginPage'
+import SuggestionsPage from './pages/SuggestionsPage'
+import HeatmapSuggestionPage from './pages/HeatmapSuggestionPage'
 import {
   clearSession,
   loadSession,
@@ -113,6 +115,9 @@ const heatmapDatasets: HeatmapDataset[] = [
 
 function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false)
+  const [activePage, setActivePage] = useState<'dashboard' | 'suggestions' | 'heatmap-suggestion'>(
+    'dashboard',
+  )
   const [authMode, setAuthMode] = useState<AuthMode>('sign-in')
   const [formData, setFormData] = useState<LoginFormData>({ email: '', password: '' })
   const [loginError, setLoginError] = useState<string | null>(null)
@@ -189,23 +194,48 @@ function App() {
   return (
     <>
       {isLoggedIn ? (
-        <DashboardPage
-          schedule={schedule}
-          setSchedule={setSchedule}
-          selectedHeatmapId={selectedHeatmapId}
-          onHeatmapChange={setSelectedHeatmapId}
-          heatmapDatasets={heatmapDatasets}
-          routeStatus={routeStatus}
-          totalEvents={totalEvents}
-          peakHour={peakHour}
-          onStart={() => setRouteStatus('active')}
-          onEnd={() => setRouteStatus('ended')}
-          onLogout={() => {
-            clearSession()
-            setIsLoggedIn(false)
-            setRouteStatus('idle')
-          }}
-        />
+        activePage === 'dashboard' ? (
+          <DashboardPage
+            schedule={schedule}
+            setSchedule={setSchedule}
+            selectedHeatmapId={selectedHeatmapId}
+            onHeatmapChange={setSelectedHeatmapId}
+            heatmapDatasets={heatmapDatasets}
+            routeStatus={routeStatus}
+            totalEvents={totalEvents}
+            peakHour={peakHour}
+            onStart={() => setRouteStatus('active')}
+            onEnd={() => setRouteStatus('ended')}
+            onOpenHeatmapSuggestion={() => setActivePage('heatmap-suggestion')}
+            onOpenSuggestions={() => setActivePage('suggestions')}
+            onLogout={() => {
+              clearSession()
+              setIsLoggedIn(false)
+              setRouteStatus('idle')
+              setActivePage('dashboard')
+            }}
+          />
+        ) : activePage === 'suggestions' ? (
+          <SuggestionsPage
+            onBack={() => setActivePage('dashboard')}
+            onLogout={() => {
+              clearSession()
+              setIsLoggedIn(false)
+              setRouteStatus('idle')
+              setActivePage('dashboard')
+            }}
+          />
+        ) : (
+          <HeatmapSuggestionPage
+            onBack={() => setActivePage('dashboard')}
+            onLogout={() => {
+              clearSession()
+              setIsLoggedIn(false)
+              setRouteStatus('idle')
+              setActivePage('dashboard')
+            }}
+          />
+        )
       ) : (
         <LoginPage
           authMode={authMode}

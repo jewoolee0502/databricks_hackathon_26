@@ -59,6 +59,8 @@ type DashboardPageProps = {
   peakHour: string
   onStart: () => void
   onEnd: () => void
+  onOpenHeatmapSuggestion: () => void
+  onOpenSuggestions: () => void
   onLogout: () => void
 }
 
@@ -73,6 +75,8 @@ export default function DashboardPage({
   peakHour,
   onStart,
   onEnd,
+  onOpenHeatmapSuggestion,
+  onOpenSuggestions,
   onLogout,
 }: DashboardPageProps) {
   const [routeFrom, setRouteFrom] = useState(STM_ROUTES[0])
@@ -83,6 +87,10 @@ export default function DashboardPage({
     heatmapDatasets.find((d) => d.id === selectedHeatmapId) ?? heatmapDatasets[0]
 
   const activeTod = TOD_WINDOWS.find((w) => w.id === todFilter) ?? TOD_WINDOWS[0]
+  const googleMapsApiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY?.trim()
+  const googleMapSrc = googleMapsApiKey
+    ? `https://www.google.com/maps/embed/v1/place?key=${googleMapsApiKey}&q=Montreal%20QC&zoom=11`
+    : 'https://www.google.com/maps?q=Montreal%20QC&output=embed'
 
   const statusEmoji: Record<RouteStatus, string> = { idle: '---', active: 'ON', ended: 'OFF' }
 
@@ -102,6 +110,12 @@ export default function DashboardPage({
             <span className="live-label">Live</span>
             <LiveClock />
           </div>
+          <button className="btn ghost sm" onClick={onOpenSuggestions}>
+            Suggestions
+          </button>
+          <button className="btn ghost sm" onClick={onOpenHeatmapSuggestion}>
+            Heatmap
+          </button>
           <button className="btn ghost sm" onClick={onLogout}>
             Log out
           </button>
@@ -272,7 +286,7 @@ export default function DashboardPage({
             className="map-frame"
             loading="lazy"
             referrerPolicy="no-referrer-when-downgrade"
-            src="https://www.openstreetmap.org/export/embed.html?bbox=-73.91%2C45.42%2C-73.35%2C45.72&layer=mapnik"
+            src={googleMapSrc}
           />
         </div>
       </section>
