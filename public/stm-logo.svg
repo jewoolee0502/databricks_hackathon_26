@@ -1,0 +1,8 @@
+<svg width="280" height="110" viewBox="0 0 280 110" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="STM">
+  <rect width="280" height="110" fill="none" />
+  <path d="M20 55 L55 35 L55 75 Z" fill="#f8dc00" />
+  <path d="M38 55 L93 24 C100 20 108 25 108 33 L108 77 C108 85 100 90 93 86 L38 55 Z" fill="#009fe3" />
+  <g fill="#009fe3" font-family="Arial, Helvetica, sans-serif" font-size="86" font-weight="700">
+    <text x="125" y="82">stm</text>
+  </g>
+</svg>
