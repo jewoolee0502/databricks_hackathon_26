@@ -42,3 +42,25 @@ export type AuthSession = {
   token: string
   email: string
 }
+
+export type SuggestionCategory = 'bottleneck' | 'connection-miss' | 'schedule-gap' | 'late-schedule'
+
+export type Suggestion = {
+  id: string
+  category: SuggestionCategory
+  action: string
+  projectedOutcome: string
+  rageScore: number
+  hour: number
+  ridersAffected: number
+}
+
+export type AvailableResource = {
+  routeId: string
+  routeName: string
+  hour: number
+  currentTrips: number
+  avgTrips: number
+  depot: string
+  busesAvailable: number
+}

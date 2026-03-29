@@ -1,18 +1,9 @@
 import { useState, useEffect } from 'react'
-import HeatmapGrid from '../components/HeatmapGrid'
-import MapboxHeatmap from '../components/MapboxHeatmap/MapboxHeatmap'
-import type { Dispatch, SetStateAction } from 'react'
-import type { HeatmapDataset, RouteStatus, Schedule } from '../types/dashboard'
-import type { RouteOption, SummaryData } from '../hooks/useStmData'
 
-const TOD_WINDOWS = [
-  { id: 'all', label: 'All Day', hours: null },
-  { id: 'night', label: '00-05', hours: [0, 5] as [number, number] },
-  { id: 'am-rush', label: '06-09', hours: [6, 9] as [number, number] },
-  { id: 'midday', label: '10-14', hours: [10, 14] as [number, number] },
-  { id: 'pm-rush', label: '15-18', hours: [15, 18] as [number, number] },
-  { id: 'evening', label: '19-23', hours: [19, 23] as [number, number] },
-]
+import type { Dispatch, SetStateAction } from 'react'
+import type { RouteStatus, Schedule } from '../types/dashboard'
+
+import type { RouteOption, SummaryData } from '../hooks/useStmData'
 
 function RouteStatusPill({ status }: { status: RouteStatus }) {
   const labels: Record<RouteStatus, string> = {
@@ -51,9 +42,6 @@ function LiveClock() {
 type DashboardPageProps = {
   schedule: Schedule
   setSchedule: Dispatch<SetStateAction<Schedule>>
-  selectedHeatmapId: HeatmapDataset['id']
-  onHeatmapChange: (next: HeatmapDataset['id']) => void
-  heatmapDatasets: HeatmapDataset[]
   routeStatus: RouteStatus
   totalEvents: number
   peakHour: string
@@ -63,15 +51,14 @@ type DashboardPageProps = {
   dataError: string | null
   onStart: () => void
   onEnd: () => void
+  onOpenSuggestions: () => void
+  onOpenHeatmapSuggestion: () => void
   onLogout: () => void
 }
 
 export default function DashboardPage({
   schedule,
   setSchedule,
-  selectedHeatmapId,
-  onHeatmapChange,
-  heatmapDatasets,
   routeStatus,
   totalEvents,
   peakHour,
@@ -81,13 +68,13 @@ export default function DashboardPage({
   dataError,
   onStart,
   onEnd,
+  onOpenSuggestions,
+  onOpenHeatmapSuggestion,
   onLogout,
 }: DashboardPageProps) {
   const routeLabels = routes.length > 0 ? routes.map((r) => r.label) : ['Loading...']
   const [routeFrom, setRouteFrom] = useState('')
   const [routeTo, setRouteTo] = useState('')
-  const [todFilter, setTodFilter] = useState('all')
-
   // Set default route selections when routes load
   useEffect(() => {
     if (routes.length > 0 && !routeFrom) {
@@ -95,11 +82,6 @@ export default function DashboardPage({
       if (routes.length > 1) setRouteTo(routes[1].label)
     }
   }, [routes, routeFrom])
-
-  const selectedHeatmap =
-    heatmapDatasets.find((d) => d.id === selectedHeatmapId) ?? heatmapDatasets[0]
-
-  const activeTod = TOD_WINDOWS.find((w) => w.id === todFilter) ?? TOD_WINDOWS[0]
 
   const statusEmoji: Record<RouteStatus, string> = { idle: '---', active: 'ON', ended: 'OFF' }
 
@@ -119,6 +101,12 @@ export default function DashboardPage({
             <span className="live-label">Live</span>
             <LiveClock />
           </div>
+          <button className="btn ghost sm" onClick={onOpenSuggestions}>
+            Suggestions
+          </button>
+          <button className="btn ghost sm" onClick={onOpenHeatmapSuggestion}>
+            Heatmap
+          </button>
           <button className="btn ghost sm" onClick={onLogout}>
             Log out
           </button>
@@ -248,75 +236,7 @@ export default function DashboardPage({
         </section>
       )}
 
-      <section className="heatmap-card">
-        <div className="heatmap-top">
-          <div>
-            <div className="card-title-row">
-              <h2>{selectedHeatmap?.title ?? 'Frequency Heatmap'}</h2>
-            </div>
-            <p className="heatmap-desc">{selectedHeatmap?.description}</p>
-          </div>
 
-          <div className="tabs-row" role="tablist" aria-label="Heatmap selection">
-            {heatmapDatasets.map((dataset) => (
-              <button
-                key={dataset.id}
-                type="button"
-                role="tab"
-                aria-selected={selectedHeatmapId === dataset.id}
-                className={`tab-btn ${selectedHeatmapId === dataset.id ? 'active' : ''}`}
-                onClick={() => onHeatmapChange(dataset.id)}
-              >
-                {dataset.id === 'route-hour' ? 'Route by Hour' : 'Stop Sequence by Hour'}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="tod-filter">
-          <span className="tod-label">Filter:</span>
-          <div className="tod-chips">
-            {TOD_WINDOWS.map((w) => (
-              <button
-                key={w.id}
-                className={`tod-chip ${todFilter === w.id ? 'active' : ''}`}
-                onClick={() => setTodFilter(w.id)}
-              >
-                {w.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {dataLoading && !selectedHeatmap && (
-          <p className="muted" style={{ textAlign: 'center', padding: '2rem' }}>
-            Loading heatmap data from Databricks...
-          </p>
-        )}
-
-        {selectedHeatmap && <HeatmapGrid dataset={selectedHeatmap} todRange={activeTod.hours} />}
-
-        <div className="heatmap-legend">
-          <span className="legend-label">Low</span>
-          <div className="legend-cells">
-            {['l0', 'l1', 'l2', 'l3', 'l4', 'l5'].map((l) => (
-              <div key={l} className={`legend-cell cell ${l}`} />
-            ))}
-          </div>
-          <span className="legend-label">High</span>
-        </div>
-      </section>
-
-      <section className="map-card">
-        <div className="card-title-row">
-          <h2>Montreal Transit Heatmap</h2>
-          <span className="card-badge">Frequency Map</span>
-        </div>
-        <p className="muted">
-          Hourly trip density across the STM network. Use the timeline to explore patterns.
-        </p>
-        <MapboxHeatmap />
-      </section>
     </main>
   )
 }

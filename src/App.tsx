@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import './App.css'
 import DashboardPage from './pages/DashboardPage'
+import SuggestionsPage from './pages/SuggestionsPage'
+import HeatmapSuggestionPage from './pages/HeatmapSuggestionPage'
 import LoginPage from './pages/LoginPage'
 import {
   clearSession,
@@ -13,7 +15,6 @@ import {
 import { useStmData } from './hooks/useStmData'
 import type {
   AuthMode,
-  HeatmapDataset,
   LoginFormData,
   RouteStatus,
   Schedule,
@@ -33,7 +34,7 @@ function App() {
   const [loginError, setLoginError] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [routeStatus, setRouteStatus] = useState<RouteStatus>('idle')
-  const [selectedHeatmapId, setSelectedHeatmapId] = useState<HeatmapDataset['id']>('route-hour')
+  const [activePage, setActivePage] = useState<'dashboard' | 'suggestions' | 'heatmap-suggestion'>('dashboard')
 
   const now = useMemo(() => new Date(), [])
   const oneHourAgo = useMemo(() => new Date(now.getTime() - 60 * 60 * 1000), [now])
@@ -43,7 +44,7 @@ function App() {
   })
 
   // Fetch real data from Databricks via proxy
-  const { heatmapDatasets, summary, routes, loading: dataLoading, error: dataError } = useStmData()
+  const { summary, routes, loading: dataLoading, error: dataError } = useStmData()
 
   useEffect(() => {
     const existingSession = loadSession()
@@ -91,27 +92,49 @@ function App() {
   return (
     <>
       {isLoggedIn ? (
-        <DashboardPage
-          schedule={schedule}
-          setSchedule={setSchedule}
-          selectedHeatmapId={selectedHeatmapId}
-          onHeatmapChange={setSelectedHeatmapId}
-          heatmapDatasets={heatmapDatasets}
-          routeStatus={routeStatus}
-          totalEvents={totalEvents}
-          peakHour={peakHour}
-          routes={routes}
-          summary={summary}
-          dataLoading={dataLoading}
-          dataError={dataError}
-          onStart={() => setRouteStatus('active')}
-          onEnd={() => setRouteStatus('ended')}
-          onLogout={() => {
-            clearSession()
-            setIsLoggedIn(false)
-            setRouteStatus('idle')
-          }}
-        />
+        activePage === 'suggestions' ? (
+          <SuggestionsPage
+            onBack={() => setActivePage('dashboard')}
+            onLogout={() => {
+              clearSession()
+              setIsLoggedIn(false)
+              setRouteStatus('idle')
+              setActivePage('dashboard')
+            }}
+          />
+        ) : activePage === 'heatmap-suggestion' ? (
+          <HeatmapSuggestionPage
+            onBack={() => setActivePage('dashboard')}
+            onLogout={() => {
+              clearSession()
+              setIsLoggedIn(false)
+              setRouteStatus('idle')
+              setActivePage('dashboard')
+            }}
+          />
+        ) : (
+          <DashboardPage
+            schedule={schedule}
+            setSchedule={setSchedule}
+            routeStatus={routeStatus}
+            totalEvents={totalEvents}
+            peakHour={peakHour}
+            routes={routes}
+            summary={summary}
+            dataLoading={dataLoading}
+            dataError={dataError}
+            onStart={() => setRouteStatus('active')}
+            onEnd={() => setRouteStatus('ended')}
+            onOpenSuggestions={() => setActivePage('suggestions')}
+            onOpenHeatmapSuggestion={() => setActivePage('heatmap-suggestion')}
+            onLogout={() => {
+              clearSession()
+              setIsLoggedIn(false)
+              setRouteStatus('idle')
+              setActivePage('dashboard')
+            }}
+          />
+        )
       ) : (
         <LoginPage
           authMode={authMode}

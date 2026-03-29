@@ -155,6 +155,51 @@
   color: var(--cyan);
 }
 
+/* ── Busyness legend (right side) ── */
+.map-legend {
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 6px;
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  z-index: 5;
+}
+
+.map-legend-bar {
+  width: 14px;
+  height: 140px;
+  border-radius: 4px;
+  background: linear-gradient(
+    to bottom,
+    #991b1b 0%,
+    #ef4444 12%,
+    #f97316 25%,
+    #facc15 40%,
+    #fde047 55%,
+    #86efac 75%,
+    #bbf7d0 90%,
+    #f0fdf4 100%
+  );
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.map-legend-label {
+  font-family: var(--mono);
+  font-size: 0.58rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  font-weight: 600;
+}
+
 /* ── No-data message ── */
 .map-no-data {
   position: absolute;

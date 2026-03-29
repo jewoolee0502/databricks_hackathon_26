@@ -69,6 +69,13 @@ export default function MapboxHeatmap({ className }: MapHeatmapProps) {
         </div>
       </div>
 
+      {/* Busyness Legend */}
+      <div className="map-legend">
+        <span className="map-legend-label">Busy</span>
+        <div className="map-legend-bar" />
+        <span className="map-legend-label">Quiet</span>
+      </div>
+
       {/* Time controls */}
       <div className="map-time-controls">
         <button className="map-play-btn" onClick={togglePlay} title={isPlaying ? 'Pause' : 'Play'}>

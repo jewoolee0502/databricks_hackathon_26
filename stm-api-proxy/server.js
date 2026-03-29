@@ -76,7 +76,10 @@ async function loadHeatmapData() {
       CAST(stop_lat AS DOUBLE) as lat,
       CAST(stop_lon AS DOUBLE) as lon,
       CAST(arrival_hour AS INT) as hour,
-      COUNT(*) as trip_count
+      COUNT(*) as trip_count,
+      FIRST(stop_name) as stop_name,
+      FIRST(stop_id) as stop_id,
+      CONCAT_WS(', ', COLLECT_SET(CONCAT(route_id, ' ', route_long_name))) as routes
     FROM montreal_hackathon.quebec_data.silver_transit_stm_stop_times_enriched
     WHERE stop_lat IS NOT NULL AND stop_lon IS NOT NULL AND arrival_hour IS NOT NULL
     GROUP BY stop_lat, stop_lon, arrival_hour
@@ -95,7 +98,12 @@ async function loadHeatmapData() {
     const lon = parseFloat(row.lon);
     const count = parseInt(row.trip_count, 10);
     if (isNaN(h) || h < 0 || h > 23 || isNaN(lat) || isNaN(lon)) continue;
-    hourBuckets[h].push({ lat, lon, count });
+    hourBuckets[h].push({
+      lat, lon, count,
+      stop_name: row.stop_name || '',
+      stop_id: row.stop_id || '',
+      routes: row.routes || '',
+    });
   }
 
   // Build 24 GeoJSON FeatureCollections with log-normalized weights
@@ -117,6 +125,9 @@ async function loadHeatmapData() {
       properties: {
         weight: maxLog > 0 ? Math.round((logCounts[i] / maxLog) * 10000) / 10000 : 0,
         count: p.count,
+        stop_name: p.stop_name,
+        stop_id: p.stop_id,
+        routes: p.routes,
       },
     }));
 
@@ -372,6 +383,374 @@ app.get("/api/stop-times", async (req, res) => {
     res.json({ data: rows, totalRows, columns });
   } catch (err) {
     console.error("[stop-times] Error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── 7. Suggestions engine ──
+
+function haversineMeters(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function rageScore(ridersAffected, waitMinutes, frequency) {
+  return ridersAffected * Math.pow(Math.max(waitMinutes, 0.5), 1.5) * frequency;
+}
+
+app.get("/api/suggestions", async (req, res) => {
+  try {
+    const cached = getCached("suggestions");
+    if (cached) return res.json(cached);
+
+    console.log("[suggestions] Running 4 queries in parallel...");
+
+    const TABLE =
+      "montreal_hackathon.quebec_data.silver_transit_stm_stop_times_enriched";
+
+    const [bottleneckResult, stopVolumeResult, routeDepResult, routeTotalsResult] =
+      await Promise.all([
+        // Query A: Bottleneck stops (3+ routes converging at same hour)
+        runQuery(`
+          SELECT stop_id, FIRST(stop_name) AS stop_name,
+            CAST(stop_lat AS DOUBLE) AS lat, CAST(stop_lon AS DOUBLE) AS lon,
+            CAST(arrival_hour AS INT) AS hour,
+            COUNT(DISTINCT route_id) AS route_count,
+            COUNT(*) AS trip_count,
+            CONCAT_WS(', ', COLLECT_SET(route_id)) AS route_ids
+          FROM ${TABLE}
+          WHERE stop_lat IS NOT NULL AND stop_lon IS NOT NULL AND arrival_hour IS NOT NULL
+          GROUP BY stop_id, stop_lat, stop_lon, arrival_hour
+          HAVING COUNT(DISTINCT route_id) >= 3
+          ORDER BY trip_count DESC
+          LIMIT 200
+        `),
+        // Query B: Stop-level hourly volumes for proximity matching
+        runQuery(`
+          SELECT stop_id, FIRST(stop_name) AS stop_name,
+            CAST(stop_lat AS DOUBLE) AS lat, CAST(stop_lon AS DOUBLE) AS lon,
+            route_id, FIRST(route_long_name) AS route_long_name,
+            CAST(arrival_hour AS INT) AS hour,
+            COUNT(*) AS trip_count
+          FROM ${TABLE}
+          WHERE stop_lat IS NOT NULL AND stop_lon IS NOT NULL AND arrival_hour IS NOT NULL
+          GROUP BY stop_id, stop_lat, stop_lon, route_id, arrival_hour
+          HAVING COUNT(*) >= 5
+          ORDER BY trip_count DESC
+          LIMIT 2000
+        `),
+        // Query C: Route hourly departures for headway estimation
+        runQuery(`
+          SELECT route_id, FIRST(route_long_name) AS route_long_name,
+            CAST(arrival_hour AS INT) AS hour,
+            COUNT(*) AS departures,
+            COUNT(DISTINCT stop_id) AS stop_count
+          FROM ${TABLE}
+          WHERE arrival_hour IS NOT NULL
+          GROUP BY route_id, arrival_hour
+          ORDER BY departures DESC
+          LIMIT 500
+        `),
+        // Query D: Route totals for underused line detection
+        runQuery(`
+          SELECT route_id, FIRST(route_long_name) AS route_long_name,
+            COUNT(*) AS total_trips,
+            COUNT(DISTINCT stop_id) AS stop_count,
+            COUNT(DISTINCT arrival_hour) AS active_hours
+          FROM ${TABLE}
+          WHERE arrival_hour IS NOT NULL
+          GROUP BY route_id
+          ORDER BY total_trips ASC
+          LIMIT 100
+        `),
+      ]);
+
+    const suggestions = [];
+
+    // ── Build headway lookup from Query C ──
+    const headwayMap = {};
+    const routeNameMap = {};
+    for (const r of routeDepResult.rows) {
+      const hour = parseInt(r.hour, 10);
+      const key = `${r.route_id}-${hour}`;
+      const deps = parseInt(r.departures, 10);
+      const stops = parseInt(r.stop_count, 10);
+      headwayMap[key] = 60 / Math.max(deps / Math.max(stops, 1), 1);
+      if (!routeNameMap[r.route_id]) routeNameMap[r.route_id] = r.route_long_name;
+    }
+
+    // ── Build route-hour map for gap detection ──
+    const routeHourMap = {};
+    for (const r of routeDepResult.rows) {
+      const rid = r.route_id;
+      const hour = parseInt(r.hour, 10);
+      const deps = parseInt(r.departures, 10);
+      const stops = parseInt(r.stop_count, 10);
+      if (!routeHourMap[rid]) routeHourMap[rid] = {};
+      routeHourMap[rid][hour] = { departures: deps, stopCount: stops };
+    }
+
+    // ── Step 1: Bottleneck suggestions ──
+    const bottlenecks = bottleneckResult.rows
+      .map((r) => ({
+        stopId: r.stop_id,
+        stopName: r.stop_name,
+        lat: parseFloat(r.lat),
+        lon: parseFloat(r.lon),
+        hour: parseInt(r.hour, 10),
+        routeCount: parseInt(r.route_count, 10),
+        tripCount: parseInt(r.trip_count, 10),
+        routeIds: r.route_ids,
+      }))
+      .sort((a, b) => b.tripCount * b.routeCount - a.tripCount * a.routeCount)
+      .slice(0, 4);
+
+    for (const b of bottlenecks) {
+      const estHeadway = 60 / Math.max(b.tripCount / b.routeCount, 1);
+      suggestions.push({
+        id: `bottleneck-${b.stopId}-${b.hour}`,
+        category: "bottleneck",
+        action: `Add capacity at ${b.stopName} during ${String(b.hour).padStart(2, "0")}:00`,
+        projectedOutcome: `Reduce overload at ${b.routeCount}-route junction serving ${b.tripCount} trips/hr (routes: ${b.routeIds})`,
+        rageScore: rageScore(b.tripCount, estHeadway, b.routeCount),
+        hour: b.hour,
+        ridersAffected: b.tripCount,
+      });
+    }
+
+    // ── Step 2: Connection pairs & misses ──
+    const stopVolumes = stopVolumeResult.rows.map((r) => ({
+      stopId: r.stop_id,
+      stopName: r.stop_name,
+      lat: parseFloat(r.lat),
+      lon: parseFloat(r.lon),
+      routeId: r.route_id,
+      routeName: r.route_long_name,
+      hour: parseInt(r.hour, 10),
+      tripCount: parseInt(r.trip_count, 10),
+    }));
+
+    const byHour = {};
+    for (const sv of stopVolumes) {
+      if (!byHour[sv.hour]) byHour[sv.hour] = [];
+      byHour[sv.hour].push(sv);
+    }
+
+    const connectionPairs = [];
+    const GRID_SIZE = 0.005;
+
+    for (const hour of Object.keys(byHour)) {
+      const stops = byHour[hour];
+      const grid = {};
+      for (const s of stops) {
+        const gx = Math.floor(s.lat / GRID_SIZE);
+        const gy = Math.floor(s.lon / GRID_SIZE);
+        const key = `${gx},${gy}`;
+        if (!grid[key]) grid[key] = [];
+        grid[key].push(s);
+      }
+
+      const checked = new Set();
+      for (const key of Object.keys(grid)) {
+        const [gx, gy] = key.split(",").map(Number);
+        const neighbors = [];
+        for (let dx = -1; dx <= 1; dx++) {
+          for (let dy = -1; dy <= 1; dy++) {
+            const nk = `${gx + dx},${gy + dy}`;
+            if (grid[nk]) neighbors.push(...grid[nk]);
+          }
+        }
+
+        for (const a of grid[key]) {
+          for (const b of neighbors) {
+            if (a.routeId === b.routeId) continue;
+            if (a.stopId === b.stopId) continue;
+            const pairKey = [a.stopId, b.stopId, a.routeId, b.routeId, hour]
+              .sort()
+              .join("|");
+            if (checked.has(pairKey)) continue;
+            checked.add(pairKey);
+
+            const dist = haversineMeters(a.lat, a.lon, b.lat, b.lon);
+            if (dist <= 500) {
+              connectionPairs.push({
+                stopA: a,
+                stopB: b,
+                hour: parseInt(hour, 10),
+                distance: Math.round(dist),
+                combinedTrips: a.tripCount + b.tripCount,
+              });
+            }
+          }
+        }
+      }
+    }
+
+    connectionPairs.sort((a, b) => b.combinedTrips - a.combinedTrips);
+    const topPairs = connectionPairs.slice(0, 6);
+
+    for (const pair of topPairs) {
+      const headwayB =
+        headwayMap[`${pair.stopB.routeId}-${pair.hour}`] || 15;
+      const avgWait = headwayB / 2;
+
+      if (avgWait < 2) {
+        suggestions.push({
+          id: `miss-${pair.stopA.stopId}-${pair.stopB.stopId}-${pair.hour}`,
+          category: "connection-miss",
+          action: `Shift Route ${pair.stopB.routeId} departure by 3-5 min at ${pair.stopB.stopName} (${String(pair.hour).padStart(2, "0")}:00)`,
+          projectedOutcome: `Eliminates connection miss for ${pair.combinedTrips} riders between Route ${pair.stopA.routeId} and Route ${pair.stopB.routeId} (current gap: ${avgWait.toFixed(1)} min)`,
+          rageScore: rageScore(pair.combinedTrips, Math.max(avgWait, 0.5), 2),
+          hour: pair.hour,
+          ridersAffected: pair.combinedTrips,
+        });
+      }
+    }
+
+    // ── Step 3: Schedule gaps — routes with huge headways (bus won't come for 1hr+) ──
+    for (const rid of Object.keys(routeHourMap)) {
+      const hours = routeHourMap[rid];
+      const activeHours = Object.keys(hours).map(Number).sort((a, b) => a - b);
+      if (activeHours.length < 2) continue;
+
+      for (let i = 0; i < activeHours.length - 1; i++) {
+        const gap = activeHours[i + 1] - activeHours[i];
+        if (gap >= 2) {
+          // There's a gap of 2+ hours with no service
+          const beforeHour = activeHours[i];
+          const afterHour = activeHours[i + 1];
+          const beforeData = hours[beforeHour];
+          const ridersWaiting = Math.round(beforeData.departures * 0.3); // estimate 30% need onward travel
+          const name = routeNameMap[rid] || rid;
+
+          suggestions.push({
+            id: `gap-${rid}-${beforeHour}-${afterHour}`,
+            category: "schedule-gap",
+            action: `Add bus to Route ${rid} between ${String(beforeHour).padStart(2, "0")}:00-${String(afterHour).padStart(2, "0")}:00`,
+            projectedOutcome: `Fills ${gap}-hour service gap on ${name}; ~${ridersWaiting} riders currently stranded with no bus for ${gap} hours`,
+            rageScore: rageScore(ridersWaiting, gap * 30, 1), // gap in half-hours as wait proxy
+            hour: beforeHour,
+            ridersAffected: ridersWaiting,
+          });
+        }
+      }
+    }
+
+    // ── Step 4: Late schedule / congestion bunching ──
+    // Routes where a peak hour has far more trips than surrounding hours = bunching
+    for (const rid of Object.keys(routeHourMap)) {
+      const hours = routeHourMap[rid];
+      const hourEntries = Object.entries(hours).map(([h, d]) => ({
+        hour: parseInt(h, 10),
+        deps: d.departures,
+        stops: d.stopCount,
+      }));
+      if (hourEntries.length < 4) continue;
+
+      const avgDeps = hourEntries.reduce((s, e) => s + e.deps, 0) / hourEntries.length;
+
+      for (const entry of hourEntries) {
+        // If this hour has 3x+ the average = severe bunching, spread them out
+        if (entry.deps > avgDeps * 3 && entry.deps > 20) {
+          const name = routeNameMap[rid] || rid;
+          const excess = Math.round(entry.deps - avgDeps * 2);
+          suggestions.push({
+            id: `late-${rid}-${entry.hour}`,
+            category: "late-schedule",
+            action: `Redistribute Route ${rid} buses at ${String(entry.hour).padStart(2, "0")}:00 to adjacent hours`,
+            projectedOutcome: `Spread ${excess} excess departures on ${name} to reduce bunching and fill gaps in neighboring hours`,
+            rageScore: rageScore(entry.deps, 60 / Math.max(entry.deps / entry.stops, 1), 1),
+            hour: entry.hour,
+            ridersAffected: entry.deps,
+          });
+        }
+      }
+    }
+
+    // ── Mixed sort: group by category, interleave, then sort within groups by rage ──
+    const byCategory = {};
+    for (const s of suggestions) {
+      if (!byCategory[s.category]) byCategory[s.category] = [];
+      byCategory[s.category].push(s);
+    }
+    for (const cat of Object.keys(byCategory)) {
+      byCategory[cat].sort((a, b) => b.rageScore - a.rageScore);
+    }
+
+    // Interleave categories: take top from each in round-robin
+    const categoryOrder = ["bottleneck", "connection-miss", "schedule-gap", "late-schedule"];
+    const mixed = [];
+    let round = 0;
+    while (mixed.length < 15) {
+      let added = false;
+      for (const cat of categoryOrder) {
+        if (byCategory[cat] && byCategory[cat][round]) {
+          mixed.push(byCategory[cat][round]);
+          added = true;
+        }
+      }
+      if (!added) break;
+      round++;
+    }
+
+    // ── Step 5: Underused lines → available resources (separate table) ──
+    const allRouteTotals = routeTotalsResult.rows.map((r) => ({
+      routeId: r.route_id,
+      routeName: r.route_long_name,
+      totalTrips: parseInt(r.total_trips, 10),
+      stopCount: parseInt(r.stop_count, 10),
+      activeHours: parseInt(r.active_hours, 10),
+    }));
+
+    // Compute median to find underused
+    const sortedTotals = [...allRouteTotals].sort((a, b) => a.totalTrips - b.totalTrips);
+    const median = sortedTotals.length > 0
+      ? sortedTotals[Math.floor(sortedTotals.length / 2)].totalTrips
+      : 0;
+
+    // Montreal STM depots (synthesized based on route geography)
+    const depots = [
+      "Anjou Depot", "Saint-Denis Depot", "Frontenac Depot",
+      "LaSalle Depot", "Mont-Royal Depot", "Legendre Depot",
+    ];
+
+    const availableResources = allRouteTotals
+      .filter((r) => r.totalTrips < median * 0.35 && r.totalTrips > 0)
+      .slice(0, 8)
+      .map((r, i) => {
+        const tripsPerHour = r.activeHours > 0 ? r.totalTrips / r.activeHours : 0;
+        const busesAvail = Math.max(1, Math.floor((median * 0.35 - r.totalTrips) / Math.max(r.activeHours, 1) / 3));
+        return {
+          routeId: r.routeId,
+          routeName: r.routeName,
+          hour: 0,
+          currentTrips: r.totalTrips,
+          avgTrips: Math.round(median),
+          depot: depots[i % depots.length],
+          busesAvailable: busesAvail,
+        };
+      });
+
+    const result = {
+      suggestions: mixed.slice(0, 12),
+      availableResources,
+      generatedAt: new Date().toISOString(),
+    };
+
+    setCache("suggestions", result);
+    console.log(
+      `[suggestions] Generated ${result.suggestions.length} suggestions, ${availableResources.length} available resources`
+    );
+    res.json(result);
+  } catch (err) {
+    console.error("[suggestions] Error:", err.message);
     res.status(500).json({ error: err.message });
   }
 });

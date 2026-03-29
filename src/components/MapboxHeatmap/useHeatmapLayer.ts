@@ -33,45 +33,48 @@ export function useHeatmapLayer(
       id: HEATMAP_LAYER_ID,
       type: 'heatmap',
       source: SOURCE_ID,
-      maxzoom: 15,
+      maxzoom: 16,
       paint: {
         'heatmap-weight': ['interpolate', ['linear'], ['get', 'weight'], 0, 0, 1, 1],
         'heatmap-intensity': [
           'interpolate',
           ['linear'],
           ['zoom'],
-          0, 0.8,
-          10, 2,
-          14, 4,
+          0, 0.3,
+          10, 0.8,
+          13, 1.2,
+          15, 1.5,
         ],
         'heatmap-radius': [
           'interpolate',
           ['linear'],
           ['zoom'],
-          0, 4,
-          7, 16,
-          10, 28,
-          14, 50,
+          0, 2,
+          7, 8,
+          10, 14,
+          13, 20,
+          15, 25,
         ],
         'heatmap-color': [
           'interpolate',
           ['linear'],
           ['heatmap-density'],
           0, 'rgba(0,0,0,0)',
-          0.1, '#eaf2ff',
-          0.25, '#d9e9ff',
-          0.4, '#bdd9ff',
-          0.55, '#93beff',
-          0.7, '#5f9dff',
-          0.85, '#2f7af5',
-          1.0, '#1570ef',
+          0.05, '#f0fdf4',
+          0.15, '#bbf7d0',
+          0.3, '#86efac',
+          0.45, '#fde047',
+          0.6, '#facc15',
+          0.75, '#f97316',
+          0.9, '#ef4444',
+          1.0, '#991b1b',
         ],
         'heatmap-opacity': [
           'interpolate',
           ['linear'],
           ['zoom'],
-          12, 0.9,
-          15, 0.3,
+          12, 0.85,
+          16, 0.25,
         ],
       },
     })
@@ -86,42 +89,85 @@ export function useHeatmapLayer(
           'interpolate',
           ['linear'],
           ['zoom'],
-          13, 3,
+          13, 4,
           16, 10,
         ],
         'circle-color': [
           'interpolate',
           ['linear'],
           ['get', 'weight'],
-          0, '#d9e9ff',
-          0.5, '#5f9dff',
-          1.0, '#1570ef',
+          0, '#bbf7d0',
+          0.3, '#fde047',
+          0.6, '#f97316',
+          1.0, '#991b1b',
         ],
         'circle-opacity': [
           'interpolate',
           ['linear'],
           ['zoom'],
           13, 0,
-          14, 0.85,
+          14, 0.9,
         ],
-        'circle-stroke-width': 0,
+        'circle-stroke-width': 1.5,
+        'circle-stroke-color': '#ffffff',
       },
     })
 
     // Hover popup for circles
-    const popup = new mapboxgl.Popup({ closeButton: false, closeOnClick: false })
+    const popup = new mapboxgl.Popup({
+      closeButton: false,
+      closeOnClick: false,
+      maxWidth: '320px',
+      offset: 12,
+    })
 
     map.on('mouseenter', CIRCLE_LAYER_ID, (e) => {
       map.getCanvas().style.cursor = 'pointer'
       const feature = e.features?.[0]
       if (!feature || feature.geometry.type !== 'Point') return
-      const count = feature.properties?.count ?? 0
+      const props = feature.properties ?? {}
+      const count = Number(props.count ?? 0)
+      const stopName = props.stop_name || 'Unknown Stop'
+      const stopId = props.stop_id || '--'
+      const routes = props.routes || ''
+      const weight = Number(props.weight ?? 0)
       const [lng, lat] = (feature.geometry as GeoJSON.Point).coordinates
+
+      // Busyness label
+      let busyness = 'Low'
+      let busynessColor = '#16a34a'
+      if (weight > 0.75) { busyness = 'Very High'; busynessColor = '#991b1b' }
+      else if (weight > 0.5) { busyness = 'High'; busynessColor = '#ea580c' }
+      else if (weight > 0.25) { busyness = 'Medium'; busynessColor = '#ca8a04' }
+
+      // Format routes as a list (limit to 5)
+      const routeList = routes
+        ? routes.split(', ').slice(0, 5).map((r: string) =>
+            `<span style="display:inline-block;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:4px;padding:1px 6px;margin:1px 2px;font-size:11px;white-space:nowrap">${r}</span>`
+          ).join('')
+        : '<span style="color:#94a3b8;font-size:11px">--</span>'
+      const totalRoutes = routes ? routes.split(', ').length : 0
+      const moreLabel = totalRoutes > 5 ? `<span style="color:#64748b;font-size:10px;margin-left:2px">+${totalRoutes - 5} more</span>` : ''
+
       popup
         .setLngLat([lng, lat])
-        .setHTML(
-          `<span style="font:12px var(--mono, monospace);color:var(--text, #122b46)">${Number(count).toLocaleString()} trips</span>`,
-        )
+        .setHTML(`
+          <div style="font-family:system-ui,-apple-system,sans-serif;line-height:1.5;min-width:200px">
+            <div style="font-weight:700;font-size:14px;color:#0f172a;margin-bottom:4px">${stopName}</div>
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
+              <span style="font-size:11px;color:#64748b">Stop #${stopId}</span>
+              <span style="display:inline-block;background:${busynessColor};color:#fff;border-radius:4px;padding:1px 8px;font-size:11px;font-weight:600">${busyness}</span>
+            </div>
+            <div style="border-top:1px solid #e2e8f0;padding-top:6px;margin-bottom:4px">
+              <div style="font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:3px">Trips this hour</div>
+              <div style="font-size:18px;font-weight:700;color:#0f172a">${count.toLocaleString()}</div>
+            </div>
+            <div style="border-top:1px solid #e2e8f0;padding-top:6px">
+              <div style="font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:3px">Bus Routes</div>
+              <div style="display:flex;flex-wrap:wrap;gap:0">${routeList}${moreLabel}</div>
+            </div>
+          </div>
+        `)
         .addTo(map)
     })
 
